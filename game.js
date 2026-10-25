@@ -1,10 +1,24 @@
 /* global Phaser, COIN_DASH */
+const HIGH_SCORE_KEY = 'coinDashHighScore';
+
+function loadHighScore() {
+  try {
+    const value = parseInt(localStorage.getItem(HIGH_SCORE_KEY), 10);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch (e) { return 0; } // storage unavailable (private mode, blocked)
+}
+
+function saveHighScore(value) {
+  try { localStorage.setItem(HIGH_SCORE_KEY, String(value)); } catch (e) { /* ignore */ }
+}
+
 class CoinDash extends Phaser.Scene {
   constructor() { super('CoinDash'); }
 
   create() {
     const c = COIN_DASH;
     this.score = 0;
+    this.highScore = loadHighScore();
     this.finished = false;
     this.banner = null;
     this.themeName = this.themeName || c.startTheme;
@@ -30,6 +44,10 @@ class CoinDash extends Phaser.Scene {
     this.physics.add.overlap(this.player, this.coin, () => {
       if (this.finished) return;
       this.score++;
+      if (this.score > this.highScore) {
+        this.highScore = this.score;
+        saveHighScore(this.highScore);
+      }
       this.placeCoin();
     });
     this.physics.add.overlap(this.player, this.drones, () => this.finish('A drone caught you!'));
@@ -90,7 +108,7 @@ class CoinDash extends Phaser.Scene {
     const direction = new Phaser.Math.Vector2(dx, dy).normalize().scale(COIN_DASH.playerSpeed);
     this.player.body.setVelocity(direction.x, direction.y);
     const seconds = Math.max(0, Math.ceil((this.deadline - this.time.now) / 1000));
-    this.hud.setText(`Coins: ${this.score}                       Time: ${seconds}s`);
+    this.hud.setText(`Coins: ${this.score}   Best: ${this.highScore}   Time: ${seconds}s`);
     if (seconds === 0) this.finish('Time is up!');
   }
 
