@@ -12,6 +12,39 @@ function saveHighScore(value) {
   try { localStorage.setItem(HIGH_SCORE_KEY, String(value)); } catch (e) { /* ignore */ }
 }
 
+// Synthesized coin sound (Web Audio API); no audio files needed.
+let audioCtx = null;
+function getAudioContext() {
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    audioCtx = new AC();
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+
+function playCoinSound() {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx || ctx.state !== 'running') return;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'square';
+    // Classic two-note "coin" blip: B5 then E6.
+    osc.frequency.setValueAtTime(987.77, t);
+    osc.frequency.setValueAtTime(1318.51, t + 0.07);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.15, t + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.26);
+    osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+  } catch (e) { /* audio must never break gameplay */ }
+}
+
 class CoinDash extends Phaser.Scene {
   constructor() { super('CoinDash'); }
 
@@ -22,6 +55,7 @@ class CoinDash extends Phaser.Scene {
     this.finished = false;
     this.banner = null;
     this.themeName = this.themeName || c.startTheme;
+    this.paused = false;
     this.deadline = this.time.now + c.roundSeconds * 1000;
     this.physics.world.setBounds(0, 44, c.width, c.height - 44);
     this.grid = this.add.grid(c.width / 2, c.height / 2, c.width, c.height, 40, 40);
@@ -48,13 +82,21 @@ class CoinDash extends Phaser.Scene {
         this.highScore = this.score;
         saveHighScore(this.highScore);
       }
+      playCoinSound();
       this.placeCoin();
     });
     this.physics.add.overlap(this.player, this.drones, () => this.finish('A drone caught you!'));
     this.cursors = this.input.keyboard.createCursorKeys();
     this.keys = this.input.keyboard.addKeys('W,A,S,D,R');
+    // Browsers require a user gesture before audio can start; unlock on first input.
+    this.input.keyboard.once('keydown', getAudioContext);
+    this.input.once('pointerdown', getAudioContext);
     this.input.keyboard.on('keydown-R', () => this.scene.restart());
     this.input.keyboard.on('keydown-T', () => this.toggleTheme());
+    this.pausedText = this.add.text(c.width / 2, c.height / 2, 'PAUSED',
+      { font: '48px monospace', backgroundColor: '#0a1120', padding: { x: 24, y: 12 } }
+    ).setOrigin(0.5).setDepth(10).setVisible(false);
+    this.input.keyboard.on('keydown-P', () => this.togglePause());
     this.applyTheme();
   }
 
@@ -74,6 +116,7 @@ class CoinDash extends Phaser.Scene {
     this.style(this.player, t.player);
     this.style(this.coin, t.coin);
     this.drones.getChildren().forEach(drone => this.style(drone, t.drone));
+    this.pausedText.setColor(t.text);
     if (this.banner) this.banner.setColor(t.text);
   }
 
@@ -85,6 +128,20 @@ class CoinDash extends Phaser.Scene {
     if (!t.glow) return shape.setStrokeStyle();
     shape.setStrokeStyle(2, 0xffffff, 0.9);
     shape.postFX?.addGlow(color, 4, 0, false, 0.2, 12);
+  }
+
+  togglePause() {
+    if (this.finished) return;
+    this.paused = !this.paused;
+    this.pausedText.setVisible(this.paused);
+    if (this.paused) {
+      this.physics.pause();
+      this.pausedAt = this.time.now;
+    } else {
+      // Push the deadline back by the time spent paused so the timer resumes where it stopped.
+      this.deadline += this.time.now - this.pausedAt;
+      this.physics.resume();
+    }
   }
 
   placeCoin() {
@@ -100,7 +157,7 @@ class CoinDash extends Phaser.Scene {
   }
 
   update() {
-    if (this.finished) return;
+    if (this.finished || this.paused) return;
     const dx = Number(this.cursors.right.isDown || this.keys.D.isDown)
       - Number(this.cursors.left.isDown || this.keys.A.isDown);
     const dy = Number(this.cursors.down.isDown || this.keys.S.isDown)
